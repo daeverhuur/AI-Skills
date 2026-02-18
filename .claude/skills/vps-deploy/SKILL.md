@@ -109,7 +109,12 @@ CMD ["node", "server.js"]
 ```yaml
 services:
   web:
-    build: .
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_CONVEX_URL: ${NEXT_PUBLIC_CONVEX_URL}
+        # Add more NEXT_PUBLIC_* build args as needed
+    image: ghcr.io/{owner}/{repo}:latest
     ports:
       - "{PORT}:3000"
     env_file:
@@ -314,15 +319,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_GA_ID: ${{ secrets.NEXT_PUBLIC_GA_ID }}
+          NEXT_PUBLIC_PHONE_DISPLAY: ${{ secrets.NEXT_PUBLIC_PHONE_DISPLAY }}
+          NEXT_PUBLIC_PHONE_HREF: ${{ secrets.NEXT_PUBLIC_PHONE_HREF }}
+          NEXT_PUBLIC_WHATSAPP_NUMBER: ${{ secrets.NEXT_PUBLIC_WHATSAPP_NUMBER }}
           GH_REPO: ${{ github.repository }}
         run: |
-          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}"
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=20 ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}"
 
           echo "=== Pulling latest code ==="
           $SSH_CMD "cd C:\apps\{site-name} && git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GH_REPO}.git && git pull && git remote set-url origin https://github.com/${GH_REPO}.git"
 
           echo "=== Writing environment file ==="
-          $SSH_CMD "cd C:\apps\{site-name} && (echo RESEND_API_KEY=${RESEND_API_KEY})> .env && (echo CONTACT_EMAIL=${CONTACT_EMAIL})>> .env"
+          $SSH_CMD "cd C:\apps\{site-name} && (echo RESEND_API_KEY=${RESEND_API_KEY})> .env && (echo CONTACT_EMAIL=${CONTACT_EMAIL})>> .env && (echo NEXT_PUBLIC_CONVEX_URL=${NEXT_PUBLIC_CONVEX_URL})>> .env && (echo NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID})>> .env && (echo NEXT_PUBLIC_PHONE_DISPLAY=${NEXT_PUBLIC_PHONE_DISPLAY})>> .env && (echo NEXT_PUBLIC_PHONE_HREF=${NEXT_PUBLIC_PHONE_HREF})>> .env && (echo NEXT_PUBLIC_WHATSAPP_NUMBER=${NEXT_PUBLIC_WHATSAPP_NUMBER})>> .env"
 
           echo "=== Building and starting container ==="
           $SSH_CMD "cd C:\apps\{site-name} && docker compose build --no-cache && docker compose up -d --force-recreate"
@@ -391,6 +401,7 @@ Both CI and deploy workflows read this via `node-version-file: ".nvmrc"`.
 - The SSH script runs commands in the VPS shell. Windows-style paths (`C:\apps\...`) work fine.
 - `GITHUB_TOKEN` is used temporarily for `git pull` on private repos, then the remote URL is reset to the public URL.
 - Always clean up the SSH key in an `if: always()` step.
+- **SSH keep-alive is required.** Docker builds on the VPS can take 5-10 minutes. Without `-o ServerAliveInterval=30 -o ServerAliveCountMax=20`, the SSH connection will drop with "Broken pipe" during `npm ci` or `npm run build`. Always add keep-alive options to the SSH command.
 
 ### Windows-Specific
 - `ssh-keygen -f ~/.ssh/key` fails on Windows PowerShell. Use full path: `ssh-keygen -f C:\Users\DAerts\.ssh\key`
@@ -410,6 +421,8 @@ Both CI and deploy workflows read this via `node-version-file: ".nvmrc"`.
 - `NEXT_PUBLIC_*` vars are baked into the client bundle at **build time** (not runtime).
 - They must be available as Docker build args or in the build environment.
 - Server-side secrets (e.g., `RESEND_API_KEY`) go in `.env` and are passed at runtime via `env_file` in docker-compose.yml.
+- **The CI/CD `.env` write step must include ALL vars.** If the workflow overwrites `.env` with only server-side secrets, the `NEXT_PUBLIC_*` vars are lost. Docker Compose reads build args from `.env` via `${VAR}` interpolation, so ALL needed vars must be present before `docker compose build`.
+- **docker-compose.yml must have a `build:` directive.** Without `build: { context: . }`, `docker compose build --no-cache` has nothing to build and silently does nothing. The container will keep running the old image. Always include both `build:` and `image:` in docker-compose.yml.
 
 ### Convex
 - If the project uses Convex, the `deploy-convex` job runs `npx convex deploy` with the `CONVEX_DEPLOY_KEY` secret.
